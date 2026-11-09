@@ -51,6 +51,12 @@ FALLBACK_FONTS = ("Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI",
                   "PingFang SC", "Noto Sans CJK SC")
 BASE_W, BASE_H = 980, 760
 DETAILS_HEIGHT = 180
+CONTENT_MAX_W = 1240
+
+
+def scale_px(px: float, scale: float) -> int:
+    """把设计稿像素按 DPI 缩放比折算为实际像素（缩放比限制在 0.75~2.0）。"""
+    return max(int(round(px * max(0.75, min(scale, 2.0)))), 1)
 
 
 def enable_high_dpi() -> None:
@@ -208,6 +214,9 @@ class MTLApp:
         self._scrollers: set = set()
         self._fitting_options = False
         self._fitting_result = False
+        self._fitting_body = False
+        self._actions_narrow = False
+        self.ui_scale = self._detect_scale()
 
         self.font_family = self._pick_font(root)
         self.font_mono = self._pick_mono(root)
@@ -220,6 +229,13 @@ class MTLApp:
         self._bind_global_events()
 
     # ------------------------------------------------------------- 基础样式
+    def _detect_scale(self) -> float:
+        """读取系统 DPI 缩放比，用于所有像素级布局计算。"""
+        try:
+            return max(0.75, min(float(self.root.winfo_fpixels("1i")) / 96.0, 2.0))
+        except Exception:
+            return 1.0
+
     def _pick_font(self, root) -> str:
         try:
             available = set(tkfont.families(root))
@@ -261,9 +277,10 @@ class MTLApp:
         style.configure("Muted.TLabel", background=CARD, foreground=MUTED, font=self.font_small)
         style.configure("Section.TLabel", background=CARD, foreground=TEXT, font=self.font_section)
         style.configure("TRadiobutton", background=CARD, foreground=TEXT,
-                        font=self.font_body, focuscolor=CARD)
+                        font=self.font_body, focuscolor=ACCENT)
         style.map("TRadiobutton", background=[("active", CARD)])
-        style.configure("TCheckbutton", background=CARD, foreground=TEXT, font=self.font_small)
+        style.configure("TCheckbutton", background=CARD, foreground=TEXT, font=self.font_small,
+                        focuscolor=ACCENT)
         style.map("TCheckbutton", background=[("active", CARD)])
         style.configure("TButton", font=self.font_button, padding=(12, 7),
                         background="#E8EEF6", foreground=TEXT, borderwidth=0)
@@ -321,17 +338,21 @@ class MTLApp:
                  font=(self.font_family, 9)).grid(row=0, column=1, sticky="ne")
 
     def _build_body(self) -> None:
-        self.body_card = RoundedCard(self.page_frame, height=330)
+        self.body_card = RoundedCard(self.page_frame, height=scale_px(330, self.ui_scale))
         self.body_card.pack(fill="x", padx=20)
         body = self.body_card.body
 
-        self.drop_canvas = tk.Canvas(body, bg=CARD, highlightthickness=0,
-                                     height=112, cursor="hand2")
+        self.drop_canvas = tk.Canvas(body, bg=CARD, highlightthickness=1,
+                                     highlightbackground=CARD, highlightcolor=ACCENT,
+                                     height=scale_px(112, self.ui_scale),
+                                     cursor="hand2", takefocus=1)
         self.drop_canvas.pack(fill="x")
         self.drop_canvas.bind("<Configure>", lambda _e: self._render_drop())
         self.drop_canvas.bind("<Button-1>", lambda _e: self.choose_files())
         self.drop_canvas.bind("<Enter>", lambda _e: self._set_drop_hover(True))
         self.drop_canvas.bind("<Leave>", lambda _e: self._set_drop_hover(False))
+        self.drop_canvas.bind("<space>", self._on_drop_key)
+        self.drop_canvas.bind("<Return>", self._on_drop_key)
         self._drop_hover = False
         self._drop_drag = False
         self._render_drop()
@@ -413,21 +434,40 @@ class MTLApp:
         bar = tk.Frame(self.page_frame, bg=BG)
         bar.pack(fill="x", padx=20, pady=(12, 0))
         bar.grid_columnconfigure(0, weight=1)
+        self.actions_bar = bar
 
         left = tk.Frame(bar, bg=BG)
         left.grid(row=0, column=0, sticky="w")
+        self.actions_left = left
         for text, command in (("还原备份", self.restore),
                               ("诊断", self.diagnose),
                               ("目录自检", self.self_check),
                               ("打开备份目录", self.open_backup_dir)):
-            btn = ttk.Button(left, text=text, command=command, width=12)
+            btn = ttk.Button(left, text=text, command=command, padding=(14, 7))
             btn.pack(side="left", padx=(0, 8))
             self._interactive.append(btn)
 
         self.start_btn = ttk.Button(bar, text="开始修复", style="Primary.TButton",
-                                    width=12, command=self.run_repair)
+                                    padding=(22, 7), command=self.run_repair)
         self.start_btn.grid(row=0, column=1, sticky="e")
         self._interactive.append(self.start_btn)
+        bar.bind("<Configure>", self._on_actions_configure)
+
+    def _on_actions_configure(self, event) -> None:
+        """宽度不足时把主按钮换到第二行，避免辅助按钮被挤压裁切。"""
+        required = (self.actions_left.winfo_reqwidth()
+                    + self.start_btn.winfo_reqwidth()
+                    + scale_px(16, self.ui_scale))
+        narrow = event.width < required
+        if narrow == self._actions_narrow:
+            return
+        self._actions_narrow = narrow
+        if narrow:
+            self.start_btn.grid_configure(row=1, column=0, columnspan=2,
+                                          sticky="ew", pady=(8, 0))
+        else:
+            self.start_btn.grid_configure(row=0, column=1, columnspan=1,
+                                          sticky="e", pady=0)
 
     def _build_result(self) -> None:
         self.result_card = RoundedCard(self.page_frame, height=112)
@@ -448,7 +488,7 @@ class MTLApp:
         self.banner_title.pack(fill="x", padx=12, pady=(8, 0))
         self.banner_text = tk.Label(self.banner, text="", bg=DANGER_BG, fg="#7B3A33",
                                     font=self.font_small, anchor="w", justify="left",
-                                    wraplength=820)
+                                    wraplength=0)
         self.banner_text.pack(fill="x", padx=12, pady=(2, 8))
 
         self.summary_row = tk.Frame(body, bg=CARD)
@@ -456,8 +496,10 @@ class MTLApp:
         self.status_dot = tk.Label(self.summary_row, text="●", bg=CARD, fg=MUTED,
                                    font=(self.font_family, 13, "bold"))
         self.status_dot.pack(side="left")
-        tk.Label(self.summary_row, textvariable=self.summary_var, bg=CARD, fg=TEXT,
-                 font=(self.font_family, 10, "bold"), anchor="w").pack(side="left", padx=(6, 0))
+        self.summary_label = tk.Label(self.summary_row, textvariable=self.summary_var,
+                                      bg=CARD, fg=TEXT, font=(self.font_family, 10, "bold"),
+                                      anchor="w", justify="left")
+        self.summary_label.pack(side="left", padx=(6, 0), fill="x", expand=True)
         self.detail_btn = tk.Button(self.summary_row, text="展开明细 ▾", command=self.toggle_details,
                                     bg=CARD, fg=ACCENT, activebackground=CARD,
                                     activeforeground=PRIMARY, relief="flat", bd=0,
@@ -468,7 +510,8 @@ class MTLApp:
                                     activeforeground=PRIMARY, relief="flat", bd=0,
                                     cursor="hand2", font=self.font_small)
 
-        self.details_frame = tk.Frame(body, bg=CARD, height=DETAILS_HEIGHT)
+        self.details_frame = tk.Frame(body, bg=CARD,
+                                      height=scale_px(DETAILS_HEIGHT, self.ui_scale))
         self.details_frame.pack_propagate(False)
         self.tb_bar = tk.Frame(self.details_frame, bg=CARD)
         self.tb_label = tk.Label(self.tb_bar, text="技术明细已折叠", bg=CARD, fg=MUTED,
@@ -505,13 +548,21 @@ class MTLApp:
         self._update_page_scrollregion()
 
     def _on_page_canvas_configure(self, event) -> None:
-        self.page_canvas.itemconfigure(self._page_window, width=event.width)
-        narrow = event.width < 900
-        target_drop = 96 if narrow else 112
+        # 超宽窗口下限制内容最大宽度并居中，避免输入区被无限拉伸
+        max_w = scale_px(CONTENT_MAX_W, self.ui_scale)
+        width = min(event.width, max_w)
+        self.page_canvas.itemconfigure(self._page_window, width=width)
+        self.page_canvas.coords(self._page_window,
+                                max((event.width - width) // 2, 0), 0)
+        narrow = event.width < scale_px(900, self.ui_scale)
+        target_drop = scale_px(96 if narrow else 112, self.ui_scale)
         if int(float(self.drop_canvas.cget("height"))) != target_drop:
             self.drop_canvas.configure(height=target_drop)
             self._render_drop()
-        self.subtitle_label.configure(wraplength=max(event.width - 170, 320))
+            self._fit_body_card()
+        self.subtitle_label.configure(
+            wraplength=max(width - scale_px(170, self.ui_scale),
+                           scale_px(320, self.ui_scale)))
         self._update_page_scrollregion()
 
     def _sync_page_scrollbar(self) -> None:
@@ -560,31 +611,52 @@ class MTLApp:
 
     # ------------------------------------------------------------ 拖拽绘制
     def _render_drop(self) -> None:
+        """按实际字体度量纵向排布图标/主文案/副文案，避免高 DPI 下重叠或压边。"""
         c = self.drop_canvas
         c.delete("all")
+        s = self.ui_scale
         w = max(c.winfo_width(), 200)
-        height = int(c.cget("height"))
-        bottom = height - 8
+        height = max(int(float(c.cget("height"))), scale_px(80, s))
+        bottom = height - scale_px(6, s)
         bg = DROP_BG_HOVER if (self._drop_hover or self._drop_drag) else DROP_BG
         outline = ACCENT if (self._drop_hover or self._drop_drag) else "#8FAFCC"
-        c.create_rectangle(4, 4, w - 4, bottom, dash=(6, 4), width=2,
-                           outline=outline, fill=bg, tags="drop")
-        cy = 22 + (height - 112) / 2
-        c.create_oval(w / 2 - 17, cy, w / 2 + 17, cy + 34, outline=ACCENT,
-                      width=2, fill=bg, tags="drop")
-        c.create_text(w / 2, cy + 17, text="＋", fill=ACCENT,
-                      font=(self.font_family, 15, "bold"), tags="drop")
+        c.create_rectangle(scale_px(4, s), scale_px(4, s),
+                           w - scale_px(4, s), bottom,
+                           dash=(6, 4), width=2, outline=outline, fill=bg, tags="drop")
+
         title = "松开即可加入" if self._drop_drag else "把 *_MTL.txt 或影像文件夹拖到这里"
-        c.create_text(w / 2, cy + 50, text=title, fill=TEXT,
-                      font=(self.font_family, 11, "bold"), tags="drop")
         sub = ("支持多文件；也可以点击此处选择" if HAS_DND
                else "未安装拖拽组件，点击此处选择文件")
-        c.create_text(w / 2, cy + 70, text=sub, fill=MUTED,
-                      font=self.font_small, tags="drop")
+        title_id = c.create_text(w / 2, 0, text=title, fill=TEXT, anchor="n",
+                                 font=(self.font_family, 11, "bold"), tags="drop")
+        sub_id = c.create_text(w / 2, 0, text=sub, fill=MUTED, anchor="n",
+                               font=self.font_small, tags="drop")
+        title_box = c.bbox(title_id) or (0, 0, 0, scale_px(18, s))
+        sub_box = c.bbox(sub_id) or (0, 0, 0, scale_px(14, s))
+        title_h = title_box[3] - title_box[1]
+        sub_h = sub_box[3] - sub_box[1]
+
+        icon_d = scale_px(34, s)
+        gap = scale_px(7, s)
+        total = icon_d + gap * 2 + title_h + sub_h
+        top = max((height - total) / 2, scale_px(6, s))
+        if top + total > bottom:
+            top = max(bottom - total, scale_px(4, s))
+        c.coords(title_id, w / 2, top + icon_d + gap)
+        c.coords(sub_id, w / 2, top + icon_d + gap + title_h + gap)
+        c.create_oval(w / 2 - icon_d / 2, top, w / 2 + icon_d / 2, top + icon_d,
+                      outline=ACCENT, width=2, fill=bg, tags="drop")
+        c.create_text(w / 2, top + icon_d / 2, text="＋", fill=ACCENT,
+                      font=(self.font_family, 15, "bold"), tags="drop")
 
     def _set_drop_hover(self, hover: bool) -> None:
         self._drop_hover = hover
         self._render_drop()
+
+    def _on_drop_key(self, _event) -> str:
+        """拖拽区获得键盘焦点时，空格/回车等价于点击选择文件。"""
+        self.choose_files()
+        return "break"
 
     def _setup_dnd(self) -> None:
         if not HAS_DND:
@@ -657,6 +729,7 @@ class MTLApp:
             child.destroy()
         self._name_labels = []
         self.count_label.configure(text=f"{len(self.files)} 个")
+        self._update_mode_hint()
         if not self.files:
             empty = tk.Label(
                 self.rows_frame,
@@ -668,6 +741,7 @@ class MTLApp:
             self.rows_frame.update_idletasks()
             self._sync_list_scroll()
             self._update_row_wrap()
+            self._fit_body_card()
             return
 
         for path in self.files:
@@ -715,9 +789,46 @@ class MTLApp:
         self.rows_frame.update_idletasks()
         self._sync_list_scroll()
         self._update_row_wrap()
+        self._fit_body_card()
+
+    def _update_mode_hint(self) -> None:
+        """补丁模式提示跟随所选模式变化，避免固定写“自动判定”造成误导。"""
+        mode = self.mode_var.get()
+        if mode == "compat":
+            text = "兼容模式：扁平化为 Collection 1 风格，保留 ENVI 5.6 必需的定标与投影字段。"
+        elif mode == "minimal":
+            text = "最小补丁：只把 SPACECRAFT_ID 改成 LANDSAT_8，其余字段保持原样。"
+        else:
+            text = ("自动判定：Collection 2 或 Level-2 → 兼容模式；"
+                    "Collection 1 + Level-1 → 最小补丁。")
+        self.auto_hint.configure(text=text)
+
+    def _fit_body_card(self) -> None:
+        """空列表时收缩卡片，有文件时按行数增高（超出部分在列表内滚动）。"""
+        if self._fitting_body:
+            return
+        self._fitting_body = True
+        try:
+            s = self.ui_scale
+            self.rows_frame.update_idletasks()
+            drop_h = int(float(self.drop_canvas.cget("height")))
+            if self.files:
+                rows_h = min(max(self.rows_frame.winfo_reqheight(), scale_px(56, s)),
+                             scale_px(190, s))
+            else:
+                rows_h = scale_px(52, s)
+            need = (drop_h + scale_px(30, s) + rows_h
+                    + 2 * self.body_card.padding + scale_px(18, s))
+            body_h = max(need, scale_px(220, s))
+            if int(float(self.body_card["height"])) != body_h:
+                self.body_card.configure(height=body_h)
+                self._update_page_scrollregion()
+        finally:
+            self._fitting_body = False
 
     def _update_row_wrap(self) -> None:
-        width = max(self.list_canvas.winfo_width() - 150, 260)
+        width = max(self.list_canvas.winfo_width() - scale_px(150, self.ui_scale),
+                    scale_px(260, self.ui_scale))
         for label in self._name_labels:
             if label.winfo_exists():
                 label.configure(wraplength=width)
@@ -742,7 +853,9 @@ class MTLApp:
         tone = ROW_HOVER if on else CARD
         row.configure(bg=tone)
         for child in row.winfo_children():
-            if isinstance(child, tk.Label):
+            if isinstance(child, tk.Button):
+                child.configure(bg=tone, activebackground=tone)
+            elif isinstance(child, tk.Label):
                 child.configure(bg=tone)
             elif isinstance(child, tk.Frame):
                 child.configure(bg=tone)
@@ -796,9 +909,16 @@ class MTLApp:
         self._fit_result_card()
 
     def _update_banner_wrap(self) -> None:
-        width = max(self.result_card.winfo_width() - 48, 280)
+        # 预留卡片左右内边距与 banner 自身 padx，避免文字右缘被裁
+        padding = 2 * self.result_card.padding + scale_px(24, self.ui_scale)
+        width = max(self.result_card.winfo_width() - padding,
+                    scale_px(260, self.ui_scale))
         self.banner_text.configure(wraplength=width)
         self.banner_title.configure(wraplength=width)
+        # 结果摘要允许换行，避免长文案把右侧按钮挤出可视区
+        self.summary_label.configure(
+            wraplength=max(width - scale_px(160, self.ui_scale),
+                           scale_px(200, self.ui_scale)))
 
     def _on_result_configure(self, event) -> None:
         self._update_banner_wrap()
@@ -855,6 +975,8 @@ class MTLApp:
             self.out_hint.configure(
                 fg=MUTED,
                 text="覆盖前会先备份原件到 _MTL_原始备份；ENVI 中请选择原名 *_MTL.txt。")
+        # 提示文案换行后高度会变，重新按内容匹配卡片高度
+        self._fit_options_card()
 
     def toggle_details(self) -> None:
         self._set_details_visible(not self._details_open)
@@ -895,6 +1017,12 @@ class MTLApp:
         width = self.root.winfo_width()
         if height <= 0:
             return
+        try:
+            # 最大化状态下改 geometry 会退出最大化，直接跳过
+            if self.root.state() == "zoomed":
+                return
+        except Exception:
+            pass
         self._programmatic = True
         self.root.geometry(f"{width}x{height}")
         self._last_size = (width, height)
@@ -1186,10 +1314,7 @@ class MTLApp:
     def _apply_initial_geometry(self) -> None:
         screen_w = self.root.winfo_screenwidth()
         screen_h = self.root.winfo_screenheight()
-        try:
-            scale = self.root.winfo_fpixels("1i") / 96.0
-        except Exception:
-            scale = 1.0
+        scale = self.ui_scale
         default = compute_window_geometry(screen_w, screen_h, scale)
         saved = load_settings().get("geometry")
         geom = parse_geometry(saved) if isinstance(saved, str) else None
@@ -1197,7 +1322,7 @@ class MTLApp:
             width, height, x, y = geom
         else:
             width, height, x, y = default
-        self.root.minsize(int(round(660 * scale)), int(round(540 * scale)))
+        self.root.minsize(scale_px(660, scale), scale_px(540, scale))
         self._programmatic = True
         self.root.geometry(f"{width}x{height}+{x}+{y}")
         self.root.update_idletasks()
@@ -1213,12 +1338,28 @@ class MTLApp:
         self._ready = True
 
     def _bind_global_events(self) -> None:
-        self.root.bind("<Return>", lambda _e: self.run_repair())
-        self.root.bind("<Escape>", lambda _e: self._on_close())
+        self.root.bind("<Return>", self._on_return_key)
+        self.root.bind("<Escape>", self._on_escape_key)
         self.root.bind("<Configure>", self._on_root_configure)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.out_var.trace_add("write", lambda *_: self._on_out_change())
         self._on_out_change()
+
+    def _on_return_key(self, _event) -> None:
+        """回车快捷键只在焦点不落在交互控件上时触发修复，避免误操作。"""
+        focus = self.root.focus_get()
+        if isinstance(focus, (ttk.Button, ttk.Radiobutton, ttk.Checkbutton,
+                              tk.Button, tk.Checkbutton, tk.Radiobutton,
+                              tk.Entry, tk.Text)):
+            return
+        self.run_repair()
+
+    def _on_escape_key(self, _event) -> None:
+        """处理中不允许用 Esc 直接关窗，避免中断写文件。"""
+        if self._busy:
+            self._set_summary("warning", "正在处理，完成后再关闭窗口。")
+            return
+        self._on_close()
 
     def _on_root_configure(self, event) -> None:
         if event.widget is not self.root:

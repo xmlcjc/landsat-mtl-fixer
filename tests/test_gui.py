@@ -66,6 +66,15 @@ class GeometryPureTest(unittest.TestCase):
         self.assertTrue(gui_mtl.geometry_is_visible((900, 700, 100, 50), 1920, 1080))
         self.assertFalse(gui_mtl.geometry_is_visible((900, 700, 5000, 50), 1920, 1080))
 
+    def test_04_像素缩放与内容上限(self):
+        self.assertEqual(gui_mtl.scale_px(180, 1.0), 180)
+        self.assertEqual(gui_mtl.scale_px(180, 1.5), 270)
+        self.assertEqual(gui_mtl.scale_px(0, 1.0), 1)
+        # 缩放比越界时被限制在 0.75~2.0
+        self.assertEqual(gui_mtl.scale_px(100, 9.9), 200)
+        self.assertEqual(gui_mtl.scale_px(100, 0.1), 75)
+        self.assertGreater(gui_mtl.CONTENT_MAX_W, 800)
+
 
 class GuiSmokeTest(unittest.TestCase):
     def setUp(self):
@@ -154,8 +163,9 @@ class GuiSmokeTest(unittest.TestCase):
         self.assertEqual(app.details_frame.winfo_manager(), "pack")
         self.assertTrue(app.output.winfo_ismapped())
         height = app.output.winfo_height()
-        self.assertGreaterEqual(height, 80)
-        self.assertLessEqual(height, 220)
+        scale = app.ui_scale
+        self.assertGreaterEqual(height, gui_mtl.scale_px(80, scale))
+        self.assertLessEqual(height, gui_mtl.scale_px(220, scale))
         self.assertIn("收起明细", app.detail_btn.cget("text"))
         # 长文本可滚动
         app.output.yview_moveto(1.0)
@@ -170,7 +180,7 @@ class GuiSmokeTest(unittest.TestCase):
         root.update()
         self.assertFalse(app.details_frame.winfo_manager())
         self.assertIn("展开明细", app.detail_btn.cget("text"))
-        self.assertLess(app.result_card.winfo_height(), 200)
+        self.assertLess(app.result_card.winfo_height(), gui_mtl.scale_px(200, app.ui_scale))
 
     def test_07_鼠标滚轮(self):
         app, root = self.app, self.root
@@ -297,6 +307,80 @@ class GuiSmokeTest(unittest.TestCase):
         self.assertIn("收起技术明细", app.tb_btn.cget("text"))
         # 标题行不折叠，用户始终知道有技术明细
         self.assertIn("技术明细", app.output.get("1.0", "end"))
+
+    # ------------------------------------------- 第二轮 UI 优化（DPI/自适应）
+    def test_13_操作条窄窗换行(self):
+        app, root = self.app, self.root
+
+        class Evt:
+            def __init__(self, width):
+                self.width = width
+
+        app._on_actions_configure(Evt(400))
+        self.assertTrue(app._actions_narrow)
+        self.assertEqual(int(app.start_btn.grid_info()["row"]), 1)
+        self.assertEqual(int(app.start_btn.grid_info()["columnspan"]), 2)
+
+        app._on_actions_configure(Evt(4000))
+        self.assertFalse(app._actions_narrow)
+        self.assertEqual(int(app.start_btn.grid_info()["row"]), 0)
+
+    def test_14_拖拽区内容不越界(self):
+        app, root = self.app, self.root
+        root.update()
+        app._render_drop()
+        root.update()
+        bbox = app.drop_canvas.bbox("all")
+        self.assertIsNotNone(bbox)
+        height = int(float(app.drop_canvas.cget("height")))
+        self.assertGreaterEqual(bbox[1], 0)
+        self.assertLessEqual(bbox[3], height)
+
+    def test_15_banner与摘要宽度随窗口自适应(self):
+        app, root = self.app, self.root
+        app._show_banner("danger", "测试标题",
+                         "这是一段较长的提示文字，用于验证换行宽度是否随窗口变化。" * 2)
+        root.update()
+        narrow = int(app.banner_text.cget("wraplength"))
+        self.assertGreater(narrow, 0)
+        self.assertLessEqual(narrow, app.result_card.winfo_width())
+        self.assertLessEqual(int(app.summary_label.cget("wraplength")),
+                             app.result_card.winfo_width())
+
+        width = gui_mtl.scale_px(1120, app.ui_scale)
+        root.geometry(f"{width}x{root.winfo_height()}")
+        root.update()
+        wide = int(app.banner_text.cget("wraplength"))
+        self.assertGreater(wide, narrow)
+        self.assertLessEqual(wide, app.result_card.winfo_width())
+
+    def test_16_键盘可达与焦点可见(self):
+        from tkinter import ttk
+
+        app, root = self.app, self.root
+        self.assertEqual(str(app.drop_canvas.cget("takefocus")), "1")
+        self.assertTrue(app.drop_canvas.bind("<space>"))
+        self.assertTrue(app.drop_canvas.bind("<Return>"))
+        style = ttk.Style(root)
+        self.assertNotEqual(style.lookup("TRadiobutton", "focuscolor"), gui_mtl.CARD)
+
+    def test_17_忙碌时Esc不关窗(self):
+        app, root = self.app, self.root
+        app._busy = True
+        app._on_escape_key(None)
+        root.update()
+        self.assertTrue(root.winfo_exists())
+        self.assertIn("正在处理", app.summary_var.get())
+        app._busy = False
+
+    def test_18_空列表卡片收缩(self):
+        app, root = self.app, self.root
+        root.update()
+        empty_height = app.body_card.winfo_height()
+        app.add_files([SAMPLE])
+        root.update()
+        self.assertGreater(app.body_card.winfo_height(), empty_height)
+        self.assertGreaterEqual(app.list_canvas.winfo_height(), 1)
 
 
 if __name__ == "__main__":
