@@ -1,0 +1,11 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# PyInstaller 中间产物（build/*.spec 为构建配置，需保留）
+build/cli/
+build/gui/
+
+# 临时文件
+*.tmp
+~$*
