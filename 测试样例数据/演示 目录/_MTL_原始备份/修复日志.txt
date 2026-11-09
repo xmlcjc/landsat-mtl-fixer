@@ -1,0 +1,18 @@
+
+====================================================================
+[2026-11-04 11:31:53] 修复 MTL
+  原文件：测试样例数据\演示 目录\LC09_L1TP_123032_20260101_20260101_02_T1_MTL.txt
+  备份  ：测试样例数据\演示 目录\_MTL_原始备份\LC09_L1TP_123032_20260101_20260101_02_T1_MTL_原始备份_20261104_113153.txt
+  输出  ：测试样例数据\演示 目录\LC09_L1TP_123032_20260101_20260101_02_T1_MTL.txt
+  输出方式：原地覆盖原 *_MTL.txt
+  原文件已被覆盖：是
+  模式  ：兼容模式（Collection 1 风格）（检测到 Collection 2（COLLECTION_NUMBER=02），按实测结论默认使用兼容模式（自动选择））
+  产品号：未改动
+  改动  ：1 项
+    - SPACECRAFT_ID: "LANDSAT_9" -> "LANDSAT_8"
+  兼容模式删除/合并字段 11 个：
+    ORIGIN，DIGITAL_FORMAT，FILE_SOURCE，PRODUCT_VERSION，FILE_NAME_QUALITY_ASSESSMENT，IMAGE_DATE，MAP_PROJECTION（重复），DATUM（重复），ELLIPSOID（重复），UTM_ZONE（重复），ZONE_NUMBER（重复）
+  说明：模式选择：检测到 Collection 2（COLLECTION_NUMBER=02），按实测结论默认使用兼容模式（自动选择）
+  说明：兼容模式：保留 135 个字段，删除/合并 11 个字段
+  说明：已原地覆盖原 *_MTL.txt（备份可用于还原）
+  结果：成功
